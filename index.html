@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PDF Finder</title>
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#0f0f10">
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 16px;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #0f0f10; color: #eaeaea; min-height: 100vh;
+  }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  .search {
+    width: 100%; padding: 10px 14px; margin-bottom: 10px;
+    background: #1c1c1f; color: #eaeaea;
+    border: 1px solid #333; border-radius: 10px;
+    font-size: 14px; outline: none;
+  }
+  .search:focus { border-color: #3a6df0; }
+  .import-btn {
+    display: block; width: 100%; padding: 14px;
+    background: #2a2a2e; color: #eaeaea;
+    border: 1px dashed #555; border-radius: 12px;
+    font-size: 15px; text-align: center; cursor: pointer;
+  }
+  .import-btn:active { background: #333; }
+  #fileInput { display: none; }
+  .list { margin-top: 16px; display: grid; gap: 10px; }
+  .card {
+    background: #1c1c1f; border-radius: 12px; padding: 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .card .info { flex: 1; min-width: 0; }
+  .card .name {
+    font-size: 15px; font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .card .size { font-size: 12px; color: #888; margin-top: 2px; }
+  .card button {
+    background: #3a6df0; color: white; border: 0;
+    border-radius: 8px; padding: 8px 14px; font-size: 14px;
+    cursor: pointer; flex-shrink: 0;
+  }
+  .card .pin {
+    background: transparent; color: #888;
+    padding: 8px; font-size: 18px; line-height: 1;
+  }
+  .card .pin.active { color: #f0b23a; }
+  .empty { color: #666; text-align: center; padding: 40px 0; }
+  .progress {
+    margin-top: 10px; height: 4px; background: #2a2a2e;
+    border-radius: 2px; overflow: hidden; display: none;
+  }
+  .progress .bar {
+    height: 100%; width: 0%; background: #3a6df0; transition: width .15s;
+  }
+  .toast {
+    position: fixed; left: 50%; bottom: 30px;
+    transform: translateX(-50%);
+    background: #333; color: #fff; padding: 10px 18px;
+    border-radius: 20px; font-size: 13px;
+    opacity: 0; transition: opacity .2s; pointer-events: none;
+    max-width: 90vw; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+
+  .attribution {
+  margin-top: 32px;
+  padding: 16px 0 8px;
+  text-align: center;
+  font-size: 12px;
+  color: #666;
+  }
+
+  .attribution a {
+  color: #888;
+  text-decoration: none;
+  border-bottom: 1px dotted #555;
+  }
+
+  .attribution a:active { color: #3a6df0; }
+
+</style>
+</head>
+<body>
+
+<h1>PDF Finder</h1>
+
+<input type="text" id="search" class="search" placeholder="Search PDFs...">
+
+<label class="import-btn" for="fileInput">+ Import PDF</label>
+<input type="file" id="fileInput" accept="application/pdf" multiple>
+<div class="progress" id="progress"><div class="bar" id="progressBar"></div></div>
+
+<div class="list" id="list"></div>
+<div class="empty" id="empty">No PDFs yet. Tap "Import PDF" to add files.</div>
+<div class="toast" id="toast"></div>
+
+<footer class="attribution">
+  <a href="https://www.flaticon.com/free-icons/pdf" title="pdf icons" target="_blank" rel="noopener">
+    Pdf icons created by Bharat Icons - Flaticon
+  </a>
+</footer>
+
+<script>
+// ---------- Helpers ----------
+const $ = (s) => document.querySelector(s);
+
+function toast(msg, ms = 2200) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+// ---------- OPFS storage ----------
+async function getRoot() {
+  return await navigator.storage.getDirectory();
+}
+
+async function savePdf(file) {
+  const root = await getRoot();
+  const fh = await root.getFileHandle(file.name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(file);
+  await w.close();
+}
+
+async function listPdfs() {
+  const root = await getRoot();
+  const out = [];
+  for await (const [name, handle] of root.entries()) {
+    if (handle.kind === 'file' && name.toLowerCase().endsWith('.pdf')) {
+      const f = await handle.getFile();
+      out.push({ name, size: f.size, mtime: f.lastModified });
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+async function getPdfFile(name) {
+  const root = await getRoot();
+  const fh = await root.getFileHandle(name);
+  return await fh.getFile();
+}
+
+// ---------- Slot mapping (IndexedDB) ----------
+const DB_NAME = 'pdf-finder';
+const STORE = 'config';
+const MAX_SLOTS = 15;
+
+function idb() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function getConfig(key) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const r = db.transaction(STORE, 'readonly').objectStore(STORE).get(key);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function setConfig(key, val) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(val, key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+const getSlots = async () => (await getConfig('slots')) || {};
+
+// ---------- Open PDF ----------
+async function openPdf(name) {
+  try {
+    const file = await getPdfFile(name);
+    const url = URL.createObjectURL(file);
+    const w = window.open(url, '_blank');
+    if (!w) location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) {
+    toast('Failed to open: ' + e.message);
+  }
+}
+
+// ---------- Render list ----------
+let pdfs = [];
+let slotsCache = {};
+
+async function render() {
+  pdfs = await listPdfs();
+  slotsCache = await getSlots();
+
+  const list = $('#list');
+  const empty = $('#empty');
+  const query = $('#search').value.trim().toLowerCase();
+
+  const filtered = query
+    ? pdfs.filter((p) => p.name.toLowerCase().includes(query))
+    : pdfs;
+
+  list.innerHTML = '';
+
+  if (pdfs.length === 0) {
+    empty.style.display = 'block';
+    empty.textContent = 'No PDFs yet. Tap "Import PDF" to add files.';
+    return;
+  }
+  if (filtered.length === 0) {
+    empty.style.display = 'block';
+    empty.textContent = 'No PDF matches your search.';
+    return;
+  }
+  empty.style.display = 'none';
+
+  const slotOf = {};
+  for (const [k, v] of Object.entries(slotsCache)) slotOf[v] = k;
+
+  for (const p of filtered) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const info = document.createElement('div');
+    info.className = 'info';
+    const nm = document.createElement('div');
+    nm.className = 'name';
+    nm.textContent = p.name;
+    const sz = document.createElement('div');
+    sz.className = 'size';
+    sz.textContent = fmtSize(p.size);
+    info.append(nm, sz);
+
+    const openBtn = document.createElement('button');
+    openBtn.textContent = 'Open';
+    openBtn.onclick = () => openPdf(p.name);
+
+    const pin = document.createElement('button');
+    pin.className = 'pin' + (slotOf[p.name] ? ' active' : '');
+    pin.textContent = slotOf[p.name] ? '★' : '☆';
+    pin.title = slotOf[p.name] ? 'Slot ' + slotOf[p.name] : 'Not assigned';
+    pin.onclick = () => pinToSlot(p.name);
+
+    card.append(info, openBtn, pin);
+    list.append(card);
+  }
+}
+
+async function pinToSlot(pdfName) {
+  const slots = await getSlots();
+  const current = Object.entries(slots).find(([, v]) => v === pdfName)?.[0];
+  const input = prompt(
+    'Assign this PDF to which shortcut slot?\n' +
+      '(1-' + MAX_SLOTS + ', leave empty to unassign)\n' +
+      'Current: ' + (current || 'none'),
+    current || ''
+  );
+  if (input === null) return;
+
+  // Remove all previous bindings for this PDF
+  for (const k of Object.keys(slots)) {
+    if (slots[k] === pdfName) delete slots[k];
+  }
+
+  const trimmed = input.trim();
+  if (trimmed) {
+    const n = parseInt(trimmed, 10);
+    if (!isNaN(n) && n >= 1 && n <= MAX_SLOTS) {
+      // Remove any other PDF already in this slot
+      delete slots[n];
+      slots[n] = pdfName;
+    } else {
+      toast('Invalid slot. Must be 1-' + MAX_SLOTS);
+      return;
+    }
+  }
+
+  await setConfig('slots', slots);
+  toast('Updated. Reinstall the PWA to refresh system shortcuts.');
+  render();
+}
+
+// ---------- Import ----------
+$('#fileInput').addEventListener('change', async (e) => {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  e.target.value = '';
+
+  const progress = $('#progress');
+  const bar = $('#progressBar');
+  progress.style.display = 'block';
+
+  let saved = 0;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    bar.style.width = ((i / files.length) * 100).toFixed(0) + '%';
+    try {
+      if (!f.name.toLowerCase().endsWith('.pdf')) {
+        toast('Skipped non-PDF: ' + f.name);
+        continue;
+      }
+      await savePdf(f);
+      saved++;
+    } catch (err) {
+      toast('Failed to save ' + f.name + ': ' + err.message);
+      console.error(err);
+    }
+  }
+
+  bar.style.width = '100%';
+  setTimeout(() => {
+    progress.style.display = 'none';
+    bar.style.width = '0%';
+  }, 400);
+
+  toast('Imported ' + saved + ' PDF(s).');
+  await render();
+});
+
+// ---------- Search ----------
+$('#search').addEventListener('input', render);
+
+// ---------- Handle shortcut entry ----------
+async function handleShortcut() {
+  const params = new URLSearchParams(location.search);
+  const slot = params.get('slot');
+  if (!slot) return;
+
+  const n = parseInt(slot, 10);
+  if (isNaN(n) || n < 1 || n > MAX_SLOTS) return;
+
+  const slots = await getSlots();
+  const name = slots[n];
+  if (!name) {
+    toast('Slot ' + n + ' has no PDF assigned.');
+    return;
+  }
+
+  const all = await listPdfs();
+  if (!all.find((p) => p.name === name)) {
+    toast('File "' + name + '" no longer exists.');
+    return;
+  }
+
+  openPdf(name);
+  history.replaceState(null, '', location.pathname);
+}
+
+// ---------- Request persistent storage ----------
+async function requestPersistence() {
+  if (navigator.storage?.persist) {
+    const already = await navigator.storage.persisted();
+    if (!already) await navigator.storage.persist();
+  }
+}
+
+// ---------- Init ----------
+(async function init() {
+  await requestPersistence();
+  await render();
+  await handleShortcut();
+
+  if ('serviceWorker' in navigator) {
+    try {
+      await navigator.serviceWorker.register('./sw.js');
+    } catch (e) {
+      console.warn('SW registration failed', e);
+    }
+  }
+})();
+</script>
+</body>
+</html>

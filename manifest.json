@@ -1,0 +1,30 @@
+{
+  "name": "PDF Finder",
+  "short_name": "PDF",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f0f10",
+  "theme_color": "#0f0f10",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "shortcuts": [
+    { "name": "PDF 1",  "short_name": "1",  "url": "./?slot=1"  },
+    { "name": "PDF 2",  "short_name": "2",  "url": "./?slot=2"  },
+    { "name": "PDF 3",  "short_name": "3",  "url": "./?slot=3"  },
+    { "name": "PDF 4",  "short_name": "4",  "url": "./?slot=4"  },
+    { "name": "PDF 5",  "short_name": "5",  "url": "./?slot=5"  },
+    { "name": "PDF 6",  "short_name": "6",  "url": "./?slot=6"  },
+    { "name": "PDF 7",  "short_name": "7",  "url": "./?slot=7"  },
+    { "name": "PDF 8",  "short_name": "8",  "url": "./?slot=8"  },
+    { "name": "PDF 9",  "short_name": "9",  "url": "./?slot=9"  },
+    { "name": "PDF 10", "short_name": "10", "url": "./?slot=10" },
+    { "name": "PDF 11", "short_name": "11", "url": "./?slot=11" },
+    { "name": "PDF 12", "short_name": "12", "url": "./?slot=12" },
+    { "name": "PDF 13", "short_name": "13", "url": "./?slot=13" },
+    { "name": "PDF 14", "short_name": "14", "url": "./?slot=14" },
+    { "name": "PDF 15", "short_name": "15", "url": "./?slot=15" }
+  ]
+}
